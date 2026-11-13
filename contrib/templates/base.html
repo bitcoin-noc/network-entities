@@ -7,16 +7,22 @@
   <link rel="canonical" href="$canonical">
   <link rel="stylesheet" href="${root}style.css">
   <title>$title</title>
+  <script>try{var t=localStorage.getItem("theme");if(t)document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
+  <script src="${root}theme.js" defer></script>
+$scripts
 </head>
 <body>
 <header>
-  <nav><a href="${root}">$site_title</a> <a href="$repo_url">GitHub</a></nav>
+  $brand
+  <nav><a href="${root}${tags_dir}/">tags</a> <a href="${root}${banlist_dir}/">banlist generator</a> <a href="$repo_url">GitHub</a> <button type="button" id="theme-toggle" class="theme-toggle" hidden>&#x25D0;</button></nav>
 </header>
 <main>
 $content
 </main>
 <footer>
-  <p><a href="${root}">$site_title</a> &middot; <a href="$repo_url">Source on GitHub</a> &middot; <a href="${root}entities.json">JSON</a></p>
+  <a href="${root}">$site_title</a>
+  <a href="$repo_url">Source on GitHub</a>
+  <a href="${root}entities.json">JSON</a>
 </footer>
 </body>
 </html>

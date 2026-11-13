@@ -19,6 +19,6 @@ jobs:
         with:
           python-version: "3.12"
       - name: Validate entities
-        run: python contrib/banlist.py validate
-      - name: Build banlists and website
-        run: python contrib/banlist.py site "$RUNNER_TEMP/www"
+        run: python contrib/entities.py validate
+      - name: Build the website
+        run: python contrib/entities.py site "$RUNNER_TEMP/www"

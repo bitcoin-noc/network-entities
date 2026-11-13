@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
-"""Tooling for the Bitcoin banlist dataset.
+"""Tooling for the Bitcoin network entities dataset.
 
-Validates the entity files in entities/, generates the banlist text files and
-generates the static website. Uses only the Python standard library and
-requires Python 3.11 or newer (for tomllib).
+Validates the entity files in entities/ and generates the static website.
+Uses only the Python standard library and requires Python 3.11 or newer (for
+tomllib).
 
-    python contrib/banlist.py validate
-    python contrib/banlist.py banlist OUTDIR
-    python contrib/banlist.py site OUTDIR
+    python contrib/entities.py validate
+    python contrib/entities.py site OUTDIR
 """
 
 import argparse
@@ -23,13 +22,16 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
-REPO_URL = "https://github.com/bitcoin-noc/banlist"
-SITE_URL = "https://bitcoin-noc.github.io/banlist/"
-SITE_TITLE = "Bitcoin banlist"
+REPO_URL = "https://github.com/bitcoin-noc/network-entities"
+SITE_URL = "https://bitcoin-noc.github.io/network-entities/"
+SITE_TITLE = "Bitcoin network entities"
 SITE_DESCRIPTION = (
-    "An optional, centralized, and likely incomplete banlist containing the IP "
-    "addresses of possibly malicious entities on the Bitcoin network."
+    "Unusual, misbehaving, and possibly malicious entities on the Bitcoin "
+    "peer-to-peer network, including some that appear to spy on or track its users."
 )
+
+# Only the default of the duration input on the banlist generator. Ban durations
+# are not part of the dataset.
 DEFAULT_BANTIME_DAYS = 365
 SECONDS_PER_DAY = 60 * 60 * 24
 
@@ -43,21 +45,10 @@ DEFAULT_TAGS_FILE = ROOT / "tags.toml"
 SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 SIDECAR_SUFFIX = ".ips.txt"
 
-OUTPUT_CLI = "banlist_cli.txt"
-OUTPUT_GUI = "banlist_gui.txt"
-OUTPUT_PLAIN = "banlist_plain.txt"
 OUTPUT_JSON = "entities.json"
 OUTPUT_SCHEMA = "schema.json"
-
-CLI_HEADER = """\
-# The banlist starts below.
-# This file is not a script! Never use these commands without verifying the file content first!
-# An attacker could put a 'bitcoin-cli sendall <ATTACKER ADDRESS>' in here.
-# In an attempt to stop you from running this as script I'm adding an 'exit' in here.
-echo "You just got your funds stolen."
-exit -1
-# -----------------------
-"""
+BANLIST_DIR = "banlist"
+TAGS_DIR = "tags"
 
 Date = datetime.date
 IPNetwork = ipaddress.IPv4Network | ipaddress.IPv6Network
@@ -81,7 +72,7 @@ class Network:
 
     @property
     def text(self) -> str:
-        """The network as written into banlists: bare address for single hosts."""
+        """The network as written out: a bare address for single hosts."""
         if self.cidr.prefixlen == self.cidr.max_prefixlen:
             return str(self.cidr.network_address)
         return str(self.cidr)
@@ -103,29 +94,24 @@ class Entity:
     added: Date
     tags: list[str]
     description: str
-    bantime_days: int | None = None
-    removed: Date | None = None
-    removed_reason: str | None = None
+    inactive: Date | None = None
+    inactive_reason: str | None = None
     user_agents: list[str] = field(default_factory=list)
-    asns: list[dict] = field(default_factory=list)
     references: list[Reference] = field(default_factory=list)
     networks: list[Network] = field(default_factory=list)
 
     @property
     def active(self) -> bool:
-        return self.removed is None
+        """True while the entity is still observed on the network."""
+        return self.inactive is None
 
     @property
     def active_networks(self) -> list[Network]:
         return [n for n in self.networks if n.active]
 
     @property
-    def retired_networks(self) -> list[Network]:
+    def historic_networks(self) -> list[Network]:
         return [n for n in self.networks if not n.active]
-
-    def bantime_seconds(self, default_days: int) -> int:
-        days = self.bantime_days if self.bantime_days is not None else default_days
-        return days * SECONDS_PER_DAY
 
 
 @dataclass
@@ -156,15 +142,12 @@ ENTITY_SPEC = {
     "added": ("date", True),
     "tags": ("list[str]", True),
     "description": ("str", True),
-    "bantime_days": ("int", False),
-    "removed": ("date", False),
-    "removed_reason": ("str", False),
+    "inactive": ("date", False),
+    "inactive_reason": ("str", False),
     "user_agents": ("list[str]", False),
-    "asns": ("list[table]", False),
     "references": ("list[table]", False),
     "networks": ("list[table]", False),
 }
-ASN_SPEC = {"asn": ("int", True), "name": ("str", True)}
 REFERENCE_SPEC = {"url": ("str", True), "title": ("str", True), "date": ("date", False)}
 NETWORK_SPEC = {
     "cidr": ("str", True),
@@ -287,9 +270,8 @@ def _load_entity(errors: list[str], path: Path, tags: dict[str, str]) -> Entity 
         added=data["added"],
         tags=data["tags"],
         description=data["description"].strip(),
-        bantime_days=data.get("bantime_days"),
-        removed=data.get("removed"),
-        removed_reason=data.get("removed_reason"),
+        inactive=data.get("inactive"),
+        inactive_reason=data.get("inactive_reason"),
         user_agents=data.get("user_agents", []),
     )
 
@@ -298,22 +280,13 @@ def _load_entity(errors: list[str], path: Path, tags: dict[str, str]) -> Entity 
             errors.append(f"{ctx}: unknown tag '{tag}' (define it in tags.toml)")
     if len(set(entity.tags)) != len(entity.tags):
         errors.append(f"{ctx}: duplicate tags")
-    if entity.bantime_days is not None and entity.bantime_days <= 0:
-        errors.append(f"{ctx}: 'bantime_days' must be positive")
-    if entity.removed is not None and entity.removed < entity.added:
-        errors.append(f"{ctx}: 'removed' must not be before 'added'")
-    if entity.removed_reason is not None and entity.removed is None:
-        errors.append(f"{ctx}: 'removed_reason' requires 'removed'")
+    if entity.inactive is not None and entity.inactive < entity.added:
+        errors.append(f"{ctx}: 'inactive' must not be before 'added'")
+    if entity.inactive_reason is not None and entity.inactive is None:
+        errors.append(f"{ctx}: 'inactive_reason' requires 'inactive'")
     for ua in entity.user_agents:
         if not ua.strip():
             errors.append(f"{ctx}: empty user agent")
-
-    for i, table in enumerate(data.get("asns", [])):
-        actx = f"{ctx}: asns[{i}]"
-        if _check_table(errors, actx, table, ASN_SPEC):
-            if table["asn"] <= 0:
-                errors.append(f"{actx}: 'asn' must be positive")
-            entity.asns.append({"asn": table["asn"], "name": table["name"].strip()})
 
     for i, table in enumerate(data.get("references", [])):
         rctx = f"{ctx}: references[{i}]"
@@ -352,7 +325,7 @@ def _load_entity(errors: list[str], path: Path, tags: dict[str, str]) -> Entity 
             errors.append(f"{ctx}: duplicate network '{network.cidr}'")
         seen.add(network.cidr)
     if entity.active and not entity.active_networks:
-        errors.append(f"{ctx}: an active entity needs at least one active network")
+        errors.append(f"{ctx}: an active entity needs at least one network in use")
     return entity
 
 
@@ -470,46 +443,6 @@ def format_text(text: str) -> str:
 
 
 # --------------------------------------------------------------------------
-# Banlist generation
-# --------------------------------------------------------------------------
-
-
-def banlist_rows(entities: list[Entity], default_days: int) -> list[tuple[str, int, str]]:
-    """(network text, ban seconds, entity name) for every active network."""
-    rows = []
-    for entity in entities:
-        if not entity.active:
-            continue
-        seconds = entity.bantime_seconds(default_days)
-        for network in entity.active_networks:
-            rows.append((network.text, seconds, entity.name))
-    return rows
-
-
-def render_banlists(rows: list[tuple[str, int, str]]) -> dict[str, str]:
-    width = max((len(text) for text, _, _ in rows), default=0)
-    cli = [CLI_HEADER]
-    gui = []
-    plain = []
-    for text, seconds, name in rows:
-        cli.append(f"bitcoin-cli setban {text.ljust(width)} add {seconds:<8}  # {name}")
-        gui.append(f"setban {text.ljust(width)} add {seconds}")
-        plain.append(text)
-    return {
-        OUTPUT_CLI: "\n".join(cli) + "\n",
-        OUTPUT_GUI: "\n".join(gui) + "\n",
-        OUTPUT_PLAIN: "\n".join(plain) + "\n",
-    }
-
-
-def write_banlists(dataset: Dataset, outdir: Path, default_days: int) -> None:
-    rows = banlist_rows(dataset.entities, default_days)
-    for name, content in render_banlists(rows).items():
-        (outdir / name).write_text(content, encoding="utf-8")
-    print(f"wrote {len(rows)} networks to {outdir / OUTPUT_CLI}, {OUTPUT_GUI}, {OUTPUT_PLAIN}")
-
-
-# --------------------------------------------------------------------------
 # JSON export and schema
 # --------------------------------------------------------------------------
 
@@ -518,19 +451,17 @@ def _iso(d: Date | None) -> str | None:
     return d.isoformat() if d is not None else None
 
 
-def entity_to_json(entity: Entity, default_days: int) -> dict:
+def entity_to_json(entity: Entity) -> dict:
     return {
         "slug": entity.slug,
         "name": entity.name,
         "summary": entity.summary,
         "added": _iso(entity.added),
-        "removed": _iso(entity.removed),
-        "removed_reason": entity.removed_reason,
+        "inactive": _iso(entity.inactive),
+        "inactive_reason": entity.inactive_reason,
         "active": entity.active,
         "tags": entity.tags,
-        "bantime_days": entity.bantime_days if entity.bantime_days is not None else default_days,
         "user_agents": entity.user_agents,
-        "asns": entity.asns,
         "references": [
             {"url": r.url, "title": r.title, "date": _iso(r.date)} for r in entity.references
         ],
@@ -548,14 +479,13 @@ def entity_to_json(entity: Entity, default_days: int) -> dict:
     }
 
 
-def dataset_to_json(dataset: Dataset, default_days: int) -> dict:
+def dataset_to_json(dataset: Dataset) -> dict:
     return {
         "$schema": SITE_URL + OUTPUT_SCHEMA,
         "generated": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "source": REPO_URL,
-        "default_bantime_days": default_days,
         "tags": [{"tag": t, "description": d} for t, d in dataset.tags.items()],
-        "entities": [entity_to_json(e, default_days) for e in dataset.entities],
+        "entities": [entity_to_json(e) for e in dataset.entities],
     }
 
 
@@ -566,16 +496,15 @@ _NULLABLE_STR = {"type": ["string", "null"]}
 JSON_SCHEMA = {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "$id": SITE_URL + OUTPUT_SCHEMA,
-    "title": "Bitcoin banlist",
-    "description": "Entities and their IP networks listed on " + SITE_URL,
+    "title": SITE_TITLE,
+    "description": "Entities on the Bitcoin peer-to-peer network documented on " + SITE_URL,
     "type": "object",
-    "required": ["generated", "source", "default_bantime_days", "tags", "entities"],
+    "required": ["generated", "source", "tags", "entities"],
     "additionalProperties": False,
     "properties": {
         "$schema": {"type": "string"},
         "generated": {"type": "string", "format": "date-time"},
         "source": {"type": "string", "format": "uri"},
-        "default_bantime_days": {"type": "integer", "minimum": 1},
         "tags": {
             "type": "array",
             "items": {
@@ -594,9 +523,8 @@ JSON_SCHEMA = {
         "entity": {
             "type": "object",
             "required": [
-                "slug", "name", "summary", "added", "removed", "removed_reason", "active",
-                "tags", "bantime_days", "user_agents", "asns", "references", "description",
-                "networks",
+                "slug", "name", "summary", "added", "inactive", "inactive_reason", "active",
+                "tags", "user_agents", "references", "description", "networks",
             ],
             "additionalProperties": False,
             "properties": {
@@ -604,24 +532,17 @@ JSON_SCHEMA = {
                 "name": {"type": "string"},
                 "summary": {"type": "string"},
                 "added": _DATE,
-                "removed": _NULLABLE_DATE,
-                "removed_reason": _NULLABLE_STR,
-                "active": {"type": "boolean"},
-                "tags": {"type": "array", "items": {"type": "string"}},
-                "bantime_days": {"type": "integer", "minimum": 1},
-                "user_agents": {"type": "array", "items": {"type": "string"}},
-                "asns": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "required": ["asn", "name"],
-                        "additionalProperties": False,
-                        "properties": {
-                            "asn": {"type": "integer", "minimum": 1},
-                            "name": {"type": "string"},
-                        },
-                    },
+                "inactive": dict(
+                    _NULLABLE_DATE,
+                    description="Set once the entity is no longer observed on the network.",
+                ),
+                "inactive_reason": _NULLABLE_STR,
+                "active": {
+                    "type": "boolean",
+                    "description": "False once the entity is no longer observed on the network.",
                 },
+                "tags": {"type": "array", "items": {"type": "string"}},
+                "user_agents": {"type": "array", "items": {"type": "string"}},
                 "references": {
                     "type": "array",
                     "items": {
@@ -653,7 +574,7 @@ JSON_SCHEMA = {
                 "note": _NULLABLE_STR,
                 "active": {
                     "type": "boolean",
-                    "description": "False once the network was retired. A network is only banned if it and its entity are active.",
+                    "description": "False once the entity stopped using the network.",
                 },
             },
         },
@@ -661,9 +582,9 @@ JSON_SCHEMA = {
 }
 
 
-def write_exports(dataset: Dataset, outdir: Path, default_days: int) -> None:
+def write_exports(dataset: Dataset, outdir: Path) -> None:
     (outdir / OUTPUT_JSON).write_text(
-        json.dumps(dataset_to_json(dataset, default_days), indent=2) + "\n", encoding="utf-8"
+        json.dumps(dataset_to_json(dataset), indent=2) + "\n", encoding="utf-8"
     )
     (outdir / OUTPUT_SCHEMA).write_text(json.dumps(JSON_SCHEMA, indent=2) + "\n", encoding="utf-8")
     print(f"wrote {outdir / OUTPUT_JSON} and {OUTPUT_SCHEMA}")
@@ -687,22 +608,36 @@ def _plural(n: int, singular: str, plural: str) -> str:
 
 
 def _chips(tags: list[str], root: str) -> str:
-    return " ".join(f'<a class="tag" href="{root}#tag-{_e(t)}">{_e(t)}</a>' for t in tags)
+    return " ".join(
+        f'<a class="tag" href="{root}{TAGS_DIR}/#tag-{_e(t)}">{_e(t)}</a>' for t in tags
+    )
 
 
-def _networks_table(networks: list[Network], retired: bool) -> str:
-    head = "<th>Network</th><th>Added</th>" + ("<th>Removed</th>" if retired else "") + "<th>Note</th>"
+def _networks_table(networks: list[Network], historic: bool) -> str:
+    head = "<th>Network</th><th>First seen</th>" + ("<th>Last seen</th>" if historic else "") + "<th>Note</th>"
     rows = []
     for n in networks:
         cells = [f"<td><code>{_e(n.text)}</code></td>", f"<td>{_e(n.added)}</td>"]
-        if retired:
+        if historic:
             cells.append(f"<td>{_e(n.removed)}</td>")
         cells.append(f"<td>{format_inline(n.note) if n.note else ''}</td>")
         rows.append("<tr>" + "".join(cells) + "</tr>")
     return f'<div class="table-wrap"><table><thead><tr>{head}</tr></thead><tbody>\n' + "\n".join(rows) + "\n</tbody></table></div>"
 
 
-def render_page(title: str, description: str, canonical: str, root: str, content: str) -> str:
+def render_page(
+    title: str,
+    description: str,
+    canonical: str,
+    root: str,
+    content: str,
+    scripts: str = "",
+    brand_is_heading: bool = False,
+) -> str:
+    # The index has no heading of its own, so there the site title in the
+    # masthead is the page's <h1>.
+    tag = "h1" if brand_is_heading else "p"
+    brand = f'<{tag} class="brand"><a href="{root}">{_e(SITE_TITLE)}</a></{tag}>'
     return _template("base.html").substitute(
         title=_e(title),
         site_title=_e(SITE_TITLE),
@@ -710,91 +645,77 @@ def render_page(title: str, description: str, canonical: str, root: str, content
         canonical=_e(canonical),
         root=root,
         repo_url=_e(REPO_URL),
+        banlist_dir=BANLIST_DIR,
+        tags_dir=TAGS_DIR,
+        brand=brand,
         content=content,
+        scripts=scripts,
     )
 
 
-def render_index(dataset: Dataset, default_days: int) -> str:
+def render_index(dataset: Dataset) -> str:
     active = sorted(dataset.active_entities, key=lambda e: (e.added, e.slug), reverse=True)
-    removed = sorted([e for e in dataset.entities if not e.active], key=lambda e: e.removed, reverse=True)
+    historic = sorted([e for e in dataset.entities if not e.active], key=lambda e: e.inactive, reverse=True)
 
-    def row(e: Entity) -> str:
+    def card(e: Entity) -> str:
+        chips = f'<p class="chips">{_chips(e.tags, "")}</p>' if e.tags else ""
         return (
-            "<tr>"
-            f'<td><a href="{_e(e.slug)}/">{_e(e.name)}</a></td>'
-            f"<td>{_e(e.added)}</td>"
-            f"<td>{_chips(e.tags, '')}</td>"
-            f'<td class="num">{len(e.active_networks)}</td>'
-            f"<td>{_e(e.summary)}</td>"
-            "</tr>"
+            '<article class="entity">'
+            f'<h3><a href="{_e(e.slug)}/">{_e(e.name)}</a></h3>'
+            f"<p>{_e(e.summary)}</p>"
+            f"{chips}"
+            "</article>"
         )
 
-    entity_rows = "\n".join(row(e) for e in active) or '<tr><td colspan="5">No entities yet.</td></tr>'
+    entity_cards = "\n".join(card(e) for e in active) or "<p>No entities yet.</p>"
 
-    if removed:
-        removed_rows = "\n".join(
+    if historic:
+        historic_rows = "\n".join(
             "<tr>"
             f'<td><a href="{_e(e.slug)}/">{_e(e.name)}</a></td>'
-            f"<td>{_e(e.added)}</td><td>{_e(e.removed)}</td>"
-            f"<td>{_e(e.removed_reason or '')}</td>"
+            f"<td>{_e(e.added)}</td><td>{_e(e.inactive)}</td>"
+            f"<td>{_e(e.inactive_reason or '')}</td>"
             "</tr>"
-            for e in removed
+            for e in historic
         )
-        removed_section = (
-            "<h2 id=\"removed\">Removed entities</h2>\n"
-            "<p>These entities were removed from the banlist. Their pages are kept for reference.</p>\n"
-            '<div class="table-wrap"><table><thead><tr><th>Entity</th><th>Added</th><th>Removed</th><th>Reason</th></tr></thead>'
-            f"<tbody>\n{removed_rows}\n</tbody></table></div>"
+        historic_section = (
+            '<h2 id="historic">No longer observed</h2>\n'
+            "<p>These entities have not been observed on the network recently. Their pages are kept for reference.</p>\n"
+            '<div class="table-wrap"><table><thead><tr><th>Entity</th><th>First seen</th><th>Last seen</th><th>Note</th></tr></thead>'
+            f"<tbody>\n{historic_rows}\n</tbody></table></div>"
         )
     else:
-        removed_section = ""
+        historic_section = ""
 
-    tag_legend = "\n".join(
-        f'<dt id="tag-{_e(t)}"><span class="tag">{_e(t)}</span></dt><dd>{_e(d)}</dd>'
-        for t, d in dataset.tags.items()
-    )
-
-    network_count = sum(len(e.active_networks) for e in active)
     content = _template("index.html").substitute(
         site_description=_e(SITE_DESCRIPTION),
-        entity_count=_plural(len(active), "entity", "entities"),
-        network_count=_plural(network_count, "network", "networks"),
-        entity_rows=entity_rows,
-        removed_section=removed_section,
-        tag_legend=tag_legend or "<dd>No tags defined.</dd>",
-        default_bantime_days=default_days,
+        entity_cards=entity_cards,
+        historic_section=historic_section,
         repo_url=_e(REPO_URL),
-        cli_file=OUTPUT_CLI,
-        gui_file=OUTPUT_GUI,
-        plain_file=OUTPUT_PLAIN,
         json_file=OUTPUT_JSON,
         schema_file=OUTPUT_SCHEMA,
     )
-    return render_page(SITE_TITLE, SITE_DESCRIPTION, SITE_URL, "./", content)
+    return render_page(SITE_TITLE, SITE_DESCRIPTION, SITE_URL, "./", content, brand_is_heading=True)
 
 
-def render_entity(entity: Entity, default_days: int) -> str:
+def render_entity(entity: Entity) -> str:
     root = "../"
-    seconds = entity.bantime_seconds(default_days)
-    days = seconds // SECONDS_PER_DAY
 
     if entity.active:
-        status = f'<span class="status active">active</span> added {_e(entity.added)}'
+        status = f'<span class="status active">observed</span> since {_e(entity.added)}'
     else:
-        status = f'<span class="status removed">removed {_e(entity.removed)}</span> added {_e(entity.added)}'
-        if entity.removed_reason:
-            status += f" &middot; {_e(entity.removed_reason)}"
+        status = (
+            f'<span class="status inactive">not observed since {_e(entity.inactive)}</span>, '
+            f"first seen {_e(entity.added)}"
+        )
+        if entity.inactive_reason:
+            status += f". {_e(entity.inactive_reason)}"
 
     sections = []
     if entity.user_agents:
         items = "".join(f"<li><code>{_e(ua)}</code></li>" for ua in entity.user_agents)
         sections.append(f"<h2>User agents</h2>\n<ul>{items}</ul>")
-    if entity.asns:
-        items = "".join(
-            f'<li><a href="https://bgp.tools/as/{a["asn"]}">AS{a["asn"]}</a> {_e(a["name"])}</li>'
-            for a in entity.asns
-        )
-        sections.append(f"<h2>Autonomous systems</h2>\n<ul>{items}</ul>")
+    # The references follow the description directly, without a heading.
     if entity.references:
         items = "".join(
             f'<li><a href="{_e(r.url)}">{_e(r.title)}</a>'
@@ -802,59 +723,154 @@ def render_entity(entity: Entity, default_days: int) -> str:
             + "</li>"
             for r in entity.references
         )
-        sections.append(f"<h2>References</h2>\n<ul>{items}</ul>")
+        references_html = f'<ul class="references">{items}</ul>'
+    else:
+        references_html = ""
 
     if entity.active_networks:
-        width = max(len(n.text) for n in entity.active_networks)
-        setban = "\n".join(
-            f"bitcoin-cli setban {n.text.ljust(width)} add {seconds}" for n in entity.active_networks
-        )
         active_html = (
-            f"<h2>Active networks</h2>\n{_networks_table(entity.active_networks, retired=False)}\n"
-            f"<p>Ban these networks for {days} days with Bitcoin Core. These are not scripts; "
-            "verify the commands before running them.</p>\n"
-            f"<pre><code>{_e(setban)}</code></pre>"
+            f"<h2>Networks in use</h2>\n{_networks_table(entity.active_networks, historic=False)}"
         )
     elif entity.active:
-        active_html = "<h2>Active networks</h2><p>None.</p>"
+        active_html = "<h2>Networks in use</h2><p>None known.</p>"
     else:
-        active_html = "<h2>Active networks</h2><p>None. This entity was removed from the banlist.</p>"
+        active_html = "<h2>Networks in use</h2><p>None. This entity is no longer observed on the network.</p>"
 
-    if entity.retired_networks:
-        retired_html = f"<h2>Retired networks</h2>\n{_networks_table(entity.retired_networks, retired=True)}"
+    if entity.historic_networks:
+        historic_html = (
+            f"<h2>Previously used networks</h2>\n{_networks_table(entity.historic_networks, historic=True)}"
+        )
     else:
-        retired_html = ""
+        historic_html = ""
 
-    source_url = f"{REPO_URL}/blob/main/entities/{entity.slug}.toml"
+    # GitHub's edit view offers a fork and a pull request to anyone without
+    # write access, which is the normal way to contribute a change here.
+    edit_url = f"{REPO_URL}/edit/main/entities/{entity.slug}.toml"
     content = _template("entity.html").substitute(
         name=_e(entity.name),
         chips=_chips(entity.tags, root),
         status=status,
         summary=_e(entity.summary),
         description=format_text(entity.description),
+        references=references_html,
         sections="\n".join(sections),
         active_networks=active_html,
-        retired_networks=retired_html,
-        bantime_days=days,
-        source_url=_e(source_url),
+        historic_networks=historic_html,
+        edit_url=_e(edit_url),
     )
     return render_page(
         f"{entity.name} - {SITE_TITLE}", entity.summary, f"{SITE_URL}{entity.slug}/", root, content
     )
 
 
-def write_site(dataset: Dataset, outdir: Path, default_days: int) -> None:
+def render_tags(dataset: Dataset) -> str:
+    root = "../"
+    sections = []
+    for tag, description in dataset.tags.items():
+        carriers = [e for e in dataset.entities if tag in e.tags]
+        if carriers:
+            links = ", ".join(
+                f'<a href="{root}{_e(e.slug)}/">{_e(e.name)}</a>' for e in carriers
+            )
+            entities_line = f'<p class="muted">{_plural(len(carriers), "entity", "entities")}: {links}</p>'
+        else:
+            entities_line = '<p class="muted">No entities carry this tag.</p>'
+        sections.append(
+            f'<h2 id="tag-{_e(tag)}"><span class="tag">{_e(tag)}</span></h2>\n'
+            f"<p>{_e(description)}</p>\n{entities_line}"
+        )
+    content = _template("tags.html").substitute(
+        tag_sections="\n\n".join(sections) or "<p>No tags defined.</p>",
+    )
+    return render_page(
+        f"Tags - {SITE_TITLE}",
+        "The vocabulary used to describe what the listed entities were seen doing.",
+        f"{SITE_URL}{TAGS_DIR}/",
+        root,
+        content,
+    )
+
+
+def banlist_data(dataset: Dataset) -> dict:
+    """The data the banlist generator needs: active entities and their networks."""
+    return {
+        "entities": [
+            {
+                "slug": e.slug,
+                "name": e.name,
+                "tags": e.tags,
+                "networks": [n.text for n in e.active_networks],
+            }
+            for e in sorted(dataset.active_entities, key=lambda e: e.name.casefold())
+        ]
+    }
+
+
+def render_banlist(dataset: Dataset) -> str:
+    root = "../"
+    data = banlist_data(dataset)
+    entities = data["entities"]
+
+    tag_filters = "\n".join(
+        '<label class="toggle"><input type="checkbox" class="tag-toggle" value="{tag}">'
+        '<span class="tag">{tag}</span> <span class="muted">{description}</span></label>'.format(
+            tag=_e(t), description=_e(d)
+        )
+        for t, d in dataset.tags.items()
+    )
+
+    rows = []
+    for e in entities:
+        rows.append(
+            '<tr><td><label class="toggle"><input type="checkbox" class="entity-toggle" '
+            f'value="{_e(e["slug"])}" data-tags="{_e(" ".join(e["tags"]))}"> {_e(e["name"])}</label></td>'
+            f'<td>{_chips(e["tags"], root)}</td>'
+            f'<td class="num">{len(e["networks"])}</td>'
+            f'<td><a href="{root}{_e(e["slug"])}/">details</a></td></tr>'
+        )
+    entity_rows = "\n".join(rows) or '<tr><td colspan="4">No entities to select.</td></tr>'
+
+    # Embedded as JSON so the page works offline and without a fetch. "</" is
+    # escaped so the blob can never close the surrounding script element.
+    data_json = json.dumps(data, separators=(",", ":")).replace("</", "<\\/")
+    content = _template("banlist.html").substitute(
+        entity_rows=entity_rows,
+        tag_filters=tag_filters or '<p class="muted">No tags defined.</p>',
+        default_bantime_days=DEFAULT_BANTIME_DAYS,
+        json_file=OUTPUT_JSON,
+        root=root,
+        data_json=data_json,
+    )
+    scripts = f'<script src="{root}banlist.js" defer></script>'
+    return render_page(
+        f"Banlist generator - {SITE_TITLE}",
+        "Pick the entities you want your Bitcoin node to ban and generate the matching setban commands.",
+        f"{SITE_URL}{BANLIST_DIR}/",
+        root,
+        content,
+        scripts,
+    )
+
+
+def write_site(dataset: Dataset, outdir: Path) -> None:
     outdir.mkdir(parents=True, exist_ok=True)
-    write_banlists(dataset, outdir, default_days)
-    write_exports(dataset, outdir, default_days)
+    write_exports(dataset, outdir)
     shutil.copy(STATIC_DIR / "style.css", outdir / "style.css")
+    shutil.copy(STATIC_DIR / "banlist.js", outdir / "banlist.js")
+    shutil.copy(STATIC_DIR / "theme.js", outdir / "theme.js")
     (outdir / ".nojekyll").write_text("")
-    (outdir / "index.html").write_text(render_index(dataset, default_days), encoding="utf-8")
+    (outdir / "index.html").write_text(render_index(dataset), encoding="utf-8")
+    tags_page_dir = outdir / TAGS_DIR
+    tags_page_dir.mkdir(exist_ok=True)
+    (tags_page_dir / "index.html").write_text(render_tags(dataset), encoding="utf-8")
+    banlist_page_dir = outdir / BANLIST_DIR
+    banlist_page_dir.mkdir(exist_ok=True)
+    (banlist_page_dir / "index.html").write_text(render_banlist(dataset), encoding="utf-8")
     for entity in dataset.entities:
         page_dir = outdir / entity.slug
         page_dir.mkdir(exist_ok=True)
-        (page_dir / "index.html").write_text(render_entity(entity, default_days), encoding="utf-8")
-    print(f"wrote index and {len(dataset.entities)} entity pages to {outdir}")
+        (page_dir / "index.html").write_text(render_entity(entity), encoding="utf-8")
+    print(f"wrote index, tags, banlist generator and {len(dataset.entities)} entity pages to {outdir}")
 
 
 # --------------------------------------------------------------------------
@@ -867,10 +883,10 @@ def run_self_tests() -> bool:
     import io
     import unittest
 
-    # The tests import this file as the module "banlist". When running as a
+    # The tests import this file as the module "entities". When running as a
     # script we are "__main__", so register ourselves under that name to make
     # the tests exercise this very module instead of a second copy.
-    sys.modules.setdefault("banlist", sys.modules[__name__])
+    sys.modules.setdefault("entities", sys.modules[__name__])
     suite = unittest.defaultTestLoader.discover(str(HERE), pattern="test_*.py")
     output = io.StringIO()
     result = unittest.TextTestRunner(stream=output, verbosity=1).run(suite)
@@ -887,26 +903,15 @@ def main(argv: list[str] | None = None, *, self_test: bool = True) -> int:
         return 1
 
     parser = argparse.ArgumentParser(
-        prog="banlist", description="Validate the dataset, generate banlists and the website."
+        prog="entities", description="Validate the dataset and generate the website."
     )
     parser.add_argument("--entities", type=Path, default=DEFAULT_ENTITIES_DIR, help="entities directory")
     parser.add_argument("--tags", type=Path, default=DEFAULT_TAGS_FILE, help="tags.toml file")
     sub = parser.add_subparsers(dest="command", required=True)
 
     sub.add_parser("validate", help="validate all entity files")
-
-    for name, help_text in (
-        ("banlist", "write banlist_cli.txt, banlist_gui.txt and banlist_plain.txt"),
-        ("site", "write the website, banlists and JSON export"),
-    ):
-        p = sub.add_parser(name, help=help_text)
-        p.add_argument("outdir", type=Path, help="output directory")
-        p.add_argument(
-            "--bantime-days",
-            type=int,
-            default=DEFAULT_BANTIME_DAYS,
-            help=f"default ban duration in days for entities without bantime_days (default {DEFAULT_BANTIME_DAYS})",
-        )
+    site = sub.add_parser("site", help="write the website and the JSON export")
+    site.add_argument("outdir", type=Path, help="output directory")
 
     args = parser.parse_args(argv)
     try:
@@ -919,17 +924,12 @@ def main(argv: list[str] | None = None, *, self_test: bool = True) -> int:
 
     networks = sum(len(e.networks) for e in dataset.entities)
     active = sum(len(e.active_networks) for e in dataset.active_entities)
-    print(f"loaded {len(dataset.entities)} entities with {networks} networks ({active} active)")
+    print(f"loaded {len(dataset.entities)} entities with {networks} networks ({active} in use)")
 
     if args.command == "validate":
         return 0
-    if args.bantime_days <= 0:
-        parser.error("--bantime-days must be positive")
     args.outdir.mkdir(parents=True, exist_ok=True)
-    if args.command == "banlist":
-        write_banlists(dataset, args.outdir, args.bantime_days)
-    elif args.command == "site":
-        write_site(dataset, args.outdir, args.bantime_days)
+    write_site(dataset, args.outdir)
     return 0
 
 

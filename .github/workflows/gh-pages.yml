@@ -18,7 +18,7 @@ concurrency:
 
 jobs:
   deploy:
-    if: github.repository == 'bitcoin-noc/banlist'
+    if: github.repository == 'bitcoin-noc/network-entities'
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
@@ -32,8 +32,8 @@ jobs:
           python-version: "3.12"
       - name: Setup Pages
         uses: actions/configure-pages@v6
-      - name: Build banlists and website
-        run: python contrib/banlist.py site www
+      - name: Build the website
+        run: python contrib/entities.py site www
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v5
         with:

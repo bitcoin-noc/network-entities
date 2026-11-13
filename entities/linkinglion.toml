@@ -3,10 +3,6 @@ summary = "Connects from a few IP ranges with fake user agents and listens for t
 added = 2023-03-27
 tags = ["tx-spy", "mass-connector"]
 
-asns = [
-  { asn = 401476, name = "Spruce Creek Networks LLC" },
-]
-
 description = """
 This entity connects from multiple IP address ranges to listening Bitcoin nodes
 using fake user agents. While many of the connections are short-lived, some
@@ -95,4 +91,4 @@ note = "Lionlink Networks (AS54098)"
 cidr = "199.116.84.0/24"
 added = 2023-03-27
 removed = 2025-12-05
-note = "Lionlink Networks (AS54098). Was only documented in the description and never on the banlist. No longer announced since 2026-03-30."
+note = "Lionlink Networks (AS54098). Was only ever documented in the description. No longer announced since 2026-03-30."

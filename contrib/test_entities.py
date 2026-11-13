@@ -1,4 +1,4 @@
-"""Tests for banlist.py. Run with:
+"""Tests for entities.py. Run with:
 
     python -m unittest discover -s contrib -p "test_*.py"
 """
@@ -12,7 +12,7 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
-import banlist
+import entities as entities_mod
 
 TAGS = """
 [tags.tx-spy]
@@ -26,9 +26,7 @@ name = "Alpha <b>&</b> Co"
 summary = "Summary with <html> & escaping."
 added = 2024-01-01
 tags = ["tx-spy", "mass-connector"]
-bantime_days = 90
 user_agents = ["/alpha:0.1/"]
-asns = [{ asn = 64496, name = "Example AS" }]
 description = \"\"\"
 First paragraph with `code <b>` and https://example.com/a.
 
@@ -57,10 +55,10 @@ note = "Retired"
 
 GONE = """
 name = "Gone"
-summary = "Removed entity."
+summary = "Entity that stopped connecting."
 added = 2023-01-01
-removed = 2024-01-01
-removed_reason = "Stopped connecting."
+inactive = 2024-01-01
+inactive_reason = "Stopped connecting."
 tags = []
 description = "Was here."
 
@@ -83,11 +81,11 @@ class DatasetDir:
         for slug, text in entities.items():
             (self.entities / f"{slug}.toml").write_text(text, encoding="utf-8")
         for slug, text in (sidecars or {}).items():
-            (self.entities / f"{slug}{banlist.SIDECAR_SUFFIX}").write_text(text, encoding="utf-8")
+            (self.entities / f"{slug}{entities_mod.SIDECAR_SUFFIX}").write_text(text, encoding="utf-8")
 
-    def load(self) -> banlist.Dataset:
+    def load(self) -> entities_mod.Dataset:
         with redirect_stderr(io.StringIO()):
-            return banlist.load_dataset(self.entities, self.tags)
+            return entities_mod.load_dataset(self.entities, self.tags)
 
     def errors(self) -> list[str]:
         with self.assert_raises() as e:
@@ -108,7 +106,7 @@ class _Raises:
     def __exit__(self, exc_type, exc, tb):
         if exc_type is None:
             raise AssertionError("expected ValidationError")
-        if not issubclass(exc_type, banlist.ValidationError):
+        if not issubclass(exc_type, entities_mod.ValidationError):
             return False
         self.errors = exc.errors
         return True
@@ -116,24 +114,24 @@ class _Raises:
 
 class FormatTests(unittest.TestCase):
     def test_inline_escapes_html(self):
-        self.assertEqual(banlist.format_inline("a <b> & c"), "a &lt;b&gt; &amp; c")
+        self.assertEqual(entities_mod.format_inline("a <b> & c"), "a &lt;b&gt; &amp; c")
 
     def test_inline_code_span(self):
-        self.assertEqual(banlist.format_inline("x `a<b>` y"), "x <code>a&lt;b&gt;</code> y")
+        self.assertEqual(entities_mod.format_inline("x `a<b>` y"), "x <code>a&lt;b&gt;</code> y")
 
     def test_inline_does_not_autolink_inside_code(self):
         self.assertEqual(
-            banlist.format_inline("`https://example.com`"), "<code>https://example.com</code>"
+            entities_mod.format_inline("`https://example.com`"), "<code>https://example.com</code>"
         )
 
     def test_inline_autolinks_and_keeps_trailing_punctuation(self):
         self.assertEqual(
-            banlist.format_inline("see https://example.com/x)."),
+            entities_mod.format_inline("see https://example.com/x)."),
             'see <a href="https://example.com/x">https://example.com/x</a>).',
         )
 
     def test_text_paragraphs_and_lists(self):
-        html = banlist.format_text("Para one\nwraps.\n\n- a\n- b\n  more\n\nPara two.")
+        html = entities_mod.format_text("Para one\nwraps.\n\n- a\n- b\n  more\n\nPara two.")
         self.assertEqual(
             html,
             "<p>Para one wraps.</p>\n<ul>\n<li>a</li>\n<li>b more</li>\n</ul>\n<p>Para two.</p>",
@@ -143,9 +141,9 @@ class FormatTests(unittest.TestCase):
 class NetworkTests(unittest.TestCase):
     def test_text_strips_prefix_of_single_hosts(self):
         d = datetime.date(2024, 1, 1)
-        self.assertEqual(banlist.Network(ipaddress.ip_network("10.0.0.1/32"), d).text, "10.0.0.1")
-        self.assertEqual(banlist.Network(ipaddress.ip_network("2001:db8::1"), d).text, "2001:db8::1")
-        self.assertEqual(banlist.Network(ipaddress.ip_network("10.0.0.0/24"), d).text, "10.0.0.0/24")
+        self.assertEqual(entities_mod.Network(ipaddress.ip_network("10.0.0.1/32"), d).text, "10.0.0.1")
+        self.assertEqual(entities_mod.Network(ipaddress.ip_network("2001:db8::1"), d).text, "2001:db8::1")
+        self.assertEqual(entities_mod.Network(ipaddress.ip_network("10.0.0.0/24"), d).text, "10.0.0.0/24")
 
 
 class LoadTests(unittest.TestCase):
@@ -168,15 +166,14 @@ class LoadTests(unittest.TestCase):
         self.assertEqual([e.slug for e in ds.entities], ["gone", "alpha"])  # sorted by added
         alpha = ds.entities[1]
         self.assertEqual(alpha.name, "Alpha <b>&</b> Co")
-        self.assertEqual(alpha.bantime_days, 90)
         self.assertEqual(len(alpha.networks), 5)
         self.assertEqual(len(alpha.active_networks), 4)
-        self.assertEqual(len(alpha.retired_networks), 1)
+        self.assertEqual(len(alpha.historic_networks), 1)
         self.assertEqual(alpha.references[0].date, datetime.date(2024, 1, 2))
-        self.assertEqual(alpha.asns, [{"asn": 64496, "name": "Example AS"}])
         sidecar = [n for n in alpha.networks if str(n.cidr) == "2001:db8::2/128"][0]
         self.assertEqual(sidecar.added, alpha.added)
         self.assertFalse(ds.entities[0].active)
+        self.assertEqual(ds.entities[0].inactive, datetime.date(2024, 1, 1))
         self.assertEqual(ds.tags, {"tx-spy": "Listens for transaction announcements.", "mass-connector": "Connects to all nodes at once."})
 
     def test_errors_are_collected(self):
@@ -184,10 +181,10 @@ class LoadTests(unittest.TestCase):
 name = "Broken"
 summary = "x"
 added = 2024-01-01
-removed = 2023-01-01
-removed_reason = "r"
+inactive = 2023-01-01
+inactive_reason = "r"
 tags = ["nope"]
-bantime_days = 0
+bantime_days = 90
 bogus = 1
 description = "d"
 [[networks]]
@@ -202,9 +199,9 @@ title = "t"
         errors = "\n".join(self.dataset({"broken": broken}).errors())
         for needle in (
             "unknown key 'bogus'",
+            "unknown key 'bantime_days'",  # dropped from the schema
             "unknown tag 'nope'",
-            "'bantime_days' must be positive",
-            "'removed' must not be before 'added'",
+            "'inactive' must not be before 'added'",
             "has host bits set",
             "networks[1]: 'removed' must not be before 'added'",
             "'url' must be an http(s) URL",
@@ -236,15 +233,15 @@ title = "t"
         self.assertIn("duplicate network '192.0.2.0/24'", errors)
         self.assertIn("alpha.ips.txt:2: invalid network 'not-an-ip'", errors)
 
-    def test_active_entity_needs_active_network(self):
-        text = GONE.replace("removed = 2024-01-01\nremoved_reason = \"Stopped connecting.\"\n", "")
+    def test_active_entity_needs_a_network(self):
+        text = GONE.replace("inactive = 2024-01-01\ninactive_reason = \"Stopped connecting.\"\n", "")
         errors = "\n".join(self.dataset({"gone": text}).errors())
-        self.assertIn("an active entity needs at least one active network", errors)
+        self.assertIn("an active entity needs at least one network in use", errors)
 
-    def test_removed_reason_requires_removed(self):
-        text = ALPHA.replace('added = 2024-01-01', 'added = 2024-01-01\nremoved_reason = "why"')
+    def test_inactive_reason_requires_inactive(self):
+        text = ALPHA.replace('added = 2024-01-01', 'added = 2024-01-01\ninactive_reason = "why"')
         errors = "\n".join(self.dataset({"alpha": text}).errors())
-        self.assertIn("'removed_reason' requires 'removed'", errors)
+        self.assertIn("'inactive_reason' requires 'inactive'", errors)
 
     def test_tags_file_problems(self):
         errors = "\n".join(self.dataset({"alpha": ALPHA}, tags="[tags.Bad]\ndescription = 1\n[other]\n").errors())
@@ -257,11 +254,11 @@ title = "t"
 
     def test_overlap_is_a_warning_not_an_error(self):
         beta = GONE.replace('name = "Gone"', 'name = "Beta"').replace("203.0.113.0/24", "192.0.2.128/25")
-        beta = beta.replace("removed = 2024-01-01\nremoved_reason = \"Stopped connecting.\"\n", "").replace("removed = 2024-01-01\n", "")
+        beta = beta.replace("inactive = 2024-01-01\ninactive_reason = \"Stopped connecting.\"\n", "").replace("removed = 2024-01-01\n", "")
         d = self.dataset({"alpha": ALPHA, "beta": beta})
         stderr = io.StringIO()
         with redirect_stderr(stderr):
-            ds = banlist.load_dataset(d.entities, d.tags)
+            ds = entities_mod.load_dataset(d.entities, d.tags)
         self.assertEqual(len(ds.entities), 2)
         self.assertIn("overlaps", stderr.getvalue())
 
@@ -274,34 +271,9 @@ class OutputTests(unittest.TestCase):
     def tearDown(self):
         self.d.cleanup()
 
-    def test_banlist_rows_only_active(self):
-        rows = banlist.banlist_rows(self.ds.entities, default_days=365)
-        self.assertEqual(
-            rows,
-            [
-                ("192.0.2.0/24", 90 * 86400, "Alpha <b>&</b> Co"),
-                ("2001:db8::1", 90 * 86400, "Alpha <b>&</b> Co"),
-            ],
-        )
-
-    def test_render_banlists(self):
-        files = banlist.render_banlists(banlist.banlist_rows(self.ds.entities, 365))
-        self.assertTrue(files[banlist.OUTPUT_CLI].startswith(banlist.CLI_HEADER))
-        self.assertIn("bitcoin-cli setban 192.0.2.0/24 add 7776000   # Alpha <b>&</b> Co\n", files[banlist.OUTPUT_CLI])
-        self.assertIn("setban 2001:db8::1  add 7776000\n", files[banlist.OUTPUT_GUI])
-        self.assertEqual(files[banlist.OUTPUT_PLAIN], "192.0.2.0/24\n2001:db8::1\n")
-
-    def test_default_bantime_applies_without_override(self):
-        rows = banlist.banlist_rows([e for e in self.ds.entities], default_days=10)
-        self.assertTrue(all(seconds == 90 * 86400 for _, seconds, _ in rows))
-        alpha = self.ds.entities[1]
-        alpha.bantime_days = None
-        rows = banlist.banlist_rows([alpha], default_days=10)
-        self.assertTrue(all(seconds == 10 * 86400 for _, seconds, _ in rows))
-
     def test_json_export_matches_schema_keys(self):
-        data = banlist.dataset_to_json(self.ds, 365)
-        schema = banlist.JSON_SCHEMA
+        data = entities_mod.dataset_to_json(self.ds)
+        schema = entities_mod.JSON_SCHEMA
         self.assertEqual(set(data) - {"$schema"}, set(schema["required"]))
         entity_props = schema["$defs"]["entity"]["properties"]
         network_props = schema["$defs"]["network"]["properties"]
@@ -310,33 +282,79 @@ class OutputTests(unittest.TestCase):
             for network in entity["networks"]:
                 self.assertEqual(set(network), set(network_props))
         alpha = [e for e in data["entities"] if e["slug"] == "alpha"][0]
-        self.assertEqual(alpha["bantime_days"], 90)
         self.assertEqual(alpha["networks"][1]["cidr"], "2001:db8::1")
         self.assertFalse(alpha["networks"][2]["active"])
+        gone = [e for e in data["entities"] if e["slug"] == "gone"][0]
+        self.assertEqual(gone["inactive"], "2024-01-01")
+        self.assertFalse(gone["active"])
         json.dumps(data)  # serialisable
+
+    def test_json_export_has_no_ban_fields(self):
+        data = entities_mod.dataset_to_json(self.ds)
+        self.assertNotIn("default_bantime_days", data)
+        for entity in data["entities"]:
+            self.assertNotIn("bantime_days", entity)
+
+    def test_banlist_data_only_has_active_entities_and_networks(self):
+        data = entities_mod.banlist_data(self.ds)
+        self.assertEqual([e["slug"] for e in data["entities"]], ["alpha"])
+        self.assertEqual(data["entities"][0]["networks"], ["192.0.2.0/24", "2001:db8::1"])
+        self.assertEqual(data["entities"][0]["tags"], ["tx-spy", "mass-connector"])
 
     def test_site_build(self):
         with tempfile.TemporaryDirectory() as out:
             outdir = Path(out)
             with redirect_stdout(io.StringIO()):
-                banlist.write_site(self.ds, outdir, 365)
-            for name in ("index.html", "style.css", ".nojekyll", "entities.json", "schema.json",
-                         banlist.OUTPUT_CLI, banlist.OUTPUT_GUI, banlist.OUTPUT_PLAIN,
+                entities_mod.write_site(self.ds, outdir)
+            for name in ("index.html", "style.css", "banlist.js", "theme.js", ".nojekyll", "entities.json",
+                         "schema.json", "banlist/index.html", "tags/index.html",
                          "alpha/index.html", "gone/index.html"):
                 self.assertTrue((outdir / name).exists(), name)
             index = (outdir / "index.html").read_text(encoding="utf-8")
             self.assertIn('<a href="alpha/">Alpha &lt;b&gt;&amp;&lt;/b&gt; Co</a>', index)
-            self.assertIn("Removed entities", index)
-            self.assertIn('id="tag-mass-connector"', index)
+            self.assertIn("No longer observed", index)
+            self.assertIn('href="tags/#tag-mass-connector"', index)
+            self.assertIn('id="theme-toggle"', index)
+            self.assertIn("Rotate the cards once a day", index)
+            self.assertIn('src="./theme.js"', index)
             self.assertNotIn("<b>&</b>", index)
+            self.assertNotIn("bitcoin-cli setban", index)
             page = (outdir / "alpha" / "index.html").read_text(encoding="utf-8")
             self.assertIn("<code>code &lt;b&gt;</code>", page)
             self.assertIn('<a href="https://example.com/ref?a=1&amp;b=2">Ref &lt;title&gt;</a>', page)
-            self.assertIn("Retired networks", page)
-            self.assertIn("bitcoin-cli setban 192.0.2.0/24 add 7776000", page)
+            self.assertIn("Previously used networks", page)
+            self.assertNotIn("bitcoin-cli setban", page)
             gone = (outdir / "gone" / "index.html").read_text(encoding="utf-8")
-            self.assertIn('class="status removed"', gone)
+            self.assertIn('class="status inactive"', gone)
             self.assertIn("Stopped connecting.", gone)
+
+    def test_tags_page_lists_tags_with_their_entities(self):
+        with tempfile.TemporaryDirectory() as out:
+            outdir = Path(out)
+            with redirect_stdout(io.StringIO()):
+                entities_mod.write_site(self.ds, outdir)
+            page = (outdir / "tags" / "index.html").read_text(encoding="utf-8")
+            self.assertIn('<h2 id="tag-tx-spy">', page)
+            self.assertIn("Listens for transaction announcements.", page)
+            self.assertIn('1 entity: <a href="../alpha/">Alpha &lt;b&gt;&amp;&lt;/b&gt; Co</a>', page)
+            # "gone" carries no tags, so every tag here has exactly one entity.
+            self.assertNotIn("No entities carry this tag.", page)
+            self.assertIn('href="../banlist/"', page)  # nav
+
+    def test_banlist_page_embeds_data_and_escapes_it(self):
+        with tempfile.TemporaryDirectory() as out:
+            outdir = Path(out)
+            with redirect_stdout(io.StringIO()):
+                entities_mod.write_site(self.ds, outdir)
+            page = (outdir / "banlist" / "index.html").read_text(encoding="utf-8")
+            blob = page.split('<script type="application/json" id="entity-data">')[1].split("</script>")[0]
+            data = json.loads(blob.replace("<\\/", "</"))
+            self.assertEqual([e["slug"] for e in data["entities"]], ["alpha"])
+            self.assertEqual(data["entities"][0]["name"], "Alpha <b>&</b> Co")
+            self.assertNotIn("</", blob)  # cannot close the script element
+            self.assertIn('class="entity-toggle"', page)
+            self.assertIn('value="tx-spy"', page)
+            self.assertIn('src="../banlist.js"', page)
 
 
 class CliTests(unittest.TestCase):
@@ -345,19 +363,20 @@ class CliTests(unittest.TestCase):
         bad = DatasetDir({"alpha": ALPHA.replace('tags = ["tx-spy", "mass-connector"]', 'tags = ["nope"]')})
         try:
             with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
-                self.assertEqual(banlist.main(["--entities", str(good.entities), "--tags", str(good.tags), "validate"], self_test=False), 0)
-                self.assertEqual(banlist.main(["--entities", str(bad.entities), "--tags", str(bad.tags), "validate"], self_test=False), 1)
+                self.assertEqual(entities_mod.main(["--entities", str(good.entities), "--tags", str(good.tags), "validate"], self_test=False), 0)
+                self.assertEqual(entities_mod.main(["--entities", str(bad.entities), "--tags", str(bad.tags), "validate"], self_test=False), 1)
         finally:
             good.cleanup()
             bad.cleanup()
 
-    def test_banlist_command_writes_files(self):
+    def test_site_command_writes_files(self):
         d = DatasetDir({"alpha": ALPHA})
         try:
             with tempfile.TemporaryDirectory() as out, redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
-                code = banlist.main(["--entities", str(d.entities), "--tags", str(d.tags), "banlist", out, "--bantime-days", "7"], self_test=False)
+                code = entities_mod.main(["--entities", str(d.entities), "--tags", str(d.tags), "site", out], self_test=False)
                 self.assertEqual(code, 0)
-                self.assertEqual((Path(out) / banlist.OUTPUT_PLAIN).read_text(encoding="utf-8"), "192.0.2.0/24\n2001:db8::1\n")
+                self.assertTrue((Path(out) / "banlist" / "index.html").exists())
+                self.assertTrue((Path(out) / "entities.json").exists())
         finally:
             d.cleanup()
 
