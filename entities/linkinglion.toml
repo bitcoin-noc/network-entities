@@ -16,8 +16,8 @@ Additionally, the entity connects from two single hosts. No other addresses in
 the surrounding `/24` ranges have been observed connecting, and whether those
 `/24` ranges belong to AS401476 has not been confirmed.
 
-It's unclear if these are VPN endpoints. The entity could be a blockchain
-analysis company enhancing their products with the collected data.
+The entity could be a blockchain analysis company enhancing their products
+with the collected data. This entity is or was also active on the Monero P2P network.
 """
 
 [[references]]
@@ -28,28 +28,37 @@ date = 2023-03-27
 [[references]]
 url = "https://b10c.me/blog/013-one-year-update-on-linkinglion"
 title = "One year update on LinkingLion"
+date = 2023-03-28
 
 [[references]]
 url = "https://bnoc.xyz/t/linkinglion-an-entity-linking-bitcoin-transactions-to-ips/12"
 title = "bnoc.xyz discussion: LinkingLion, an entity linking Bitcoin transactions to IPs"
+
+[[references]]
+url = "https://linkinglion.net/"
+title = "LinkingLion: Statement from LionLink Networks"
 
 # Ranges announced by Spruce Creek Networks LLC (AS401476), used since 2025-12-05.
 
 [[networks]]
 cidr = "143.20.137.0/24"
 added = 2025-12-05
+note = "Spruce Creek Networks LLC (AS401476)"
 
 [[networks]]
 cidr = "31.58.215.0/24"
 added = 2025-12-05
+note = "Spruce Creek Networks LLC (AS401476)"
 
 [[networks]]
 cidr = "87.229.79.0/24"
 added = 2025-12-05
+note = "Spruce Creek Networks LLC (AS401476)"
 
 [[networks]]
 cidr = "2602:f5c0:0:ace::/64"
 added = 2025-12-05
+note = "Spruce Creek Networks LLC (AS401476)"
 
 [[networks]]
 cidr = "104.234.118.2"
@@ -67,28 +76,22 @@ note = "Single host. No other addresses in the surrounding /24 have been observe
 cidr = "162.218.65.0/24"
 added = 2023-03-27
 removed = 2025-12-05
-note = "Lionlink Networks (AS54098)"
+note = "Fork Networking, LLC (forked.net) announced by Lionlink Networks (AS54098)"
 
 [[networks]]
 cidr = "209.222.252.0/24"
 added = 2023-03-27
 removed = 2025-12-05
-note = "Lionlink Networks (AS54098)"
+note = "Castle VPN, LLC (castlevpn.com) announced by Lionlink Networks (AS54098)"
 
 [[networks]]
 cidr = "91.198.115.0/24"
 added = 2023-03-27
 removed = 2025-12-05
-note = "Lionlink Networks (AS54098)"
+note = "Linama UAB announced by Lionlink Networks (AS54098)"
 
 [[networks]]
 cidr = "2604:d500:4:1::/64"
 added = 2023-03-27
 removed = 2025-12-05
-note = "Lionlink Networks (AS54098)"
-
-[[networks]]
-cidr = "199.116.84.0/24"
-added = 2023-03-27
-removed = 2025-12-05
-note = "Lionlink Networks (AS54098). Was only ever documented in the description. No longer announced since 2026-03-30."
+note = "Data Canopy (datacanopy.com) announced by Lionlink Networks (AS54098)"
