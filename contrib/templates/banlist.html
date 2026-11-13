@@ -1,0 +1,57 @@
+<h1>Banlist generator</h1>
+<p class="lead">Pick the entities you would rather not be connected to and get
+the matching Bitcoin Core commands.</p>
+
+<p><code>setban</code> blocks an address in both directions: your node stops
+accepting connections from it and stops connecting to it. Some of the listed
+addresses are reachable nodes, so a ban can also cost you a peer you would
+otherwise connect to.</p>
+
+<p>Many of the listed networks are whole ranges: banning a range also bans any
+unrelated node in it, and a determined entity can move to new addresses faster
+than this collection can follow. The data is centralized, maintained by hand,
+and incomplete.</p>
+
+<noscript>
+<p class="warning">This page builds the commands in your browser and needs
+JavaScript. Without it, use <a href="${root}$json_file">$json_file</a> or copy
+the networks from the individual entity pages.</p>
+</noscript>
+
+<h2 id="tags">Select by tag</h2>
+<div class="toggles">
+$tag_filters
+</div>
+
+<h2 id="entities">Select entities</h2>
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Entity</th><th>Tags</th><th class="num">Networks</th><th></th></tr></thead>
+  <tbody>
+$entity_rows
+  </tbody>
+</table>
+</div>
+<p><button type="button" id="clear">Clear selection</button>
+<span class="muted" id="count">Nothing selected.</span></p>
+
+<h2 id="commands">Commands</h2>
+<p class="controls">
+  <label>Format
+    <select id="format">
+      <option value="cli">bitcoin-cli</option>
+      <option value="gui">Bitcoin Core GUI console</option>
+      <option value="plain">Plain list of networks</option>
+    </select>
+  </label>
+  <label>Ban for
+    <input type="number" id="days" value="$default_bantime_days" min="1" max="36500" step="1"> days
+  </label>
+  <button type="button" id="copy">Copy</button>
+  <span class="muted" id="copied" hidden>Copied.</span>
+</p>
+<p class="warning"><strong>This is not a script.</strong> Read the commands
+before you run them.</p>
+<pre><code id="output">Select one or more entities above.</code></pre>
+
+<script type="application/json" id="entity-data">$data_json</script>

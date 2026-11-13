@@ -1,4 +1,6 @@
-# Controlled vocabulary of entity tags.
+# Controlled vocabulary of entity tags. Tags describe what an entity was seen
+# doing.
+#
 # Every tag used in entities/*.toml must be defined here. Keep descriptions
 # short: they are shown as a legend on the website.
 
